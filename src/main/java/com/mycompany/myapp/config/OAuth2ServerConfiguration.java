@@ -1,29 +1,45 @@
 package com.mycompany.myapp.config;
 
-import com.mycompany.myapp.security.AjaxLogoutSuccessHandler;
-import com.mycompany.myapp.security.AuthoritiesConstants;
-import com.mycompany.myapp.security.Http401UnauthorizedEntryPoint;
+import java.security.KeyPair;
+import java.util.Arrays;
+import java.util.Date;
+
+import javax.inject.Inject;
+
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.bind.RelaxedPropertyResolver;
 import org.springframework.context.EnvironmentAware;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.common.DefaultOAuth2AccessToken;
+import org.springframework.security.oauth2.common.OAuth2AccessToken;
 import org.springframework.security.oauth2.config.annotation.configurers.ClientDetailsServiceConfigurer;
 import org.springframework.security.oauth2.config.annotation.web.configuration.AuthorizationServerConfigurerAdapter;
 import org.springframework.security.oauth2.config.annotation.web.configuration.EnableAuthorizationServer;
 import org.springframework.security.oauth2.config.annotation.web.configuration.EnableResourceServer;
 import org.springframework.security.oauth2.config.annotation.web.configuration.ResourceServerConfigurerAdapter;
 import org.springframework.security.oauth2.config.annotation.web.configurers.AuthorizationServerEndpointsConfigurer;
+import org.springframework.security.oauth2.config.annotation.web.configurers.ResourceServerSecurityConfigurer;
+import org.springframework.security.oauth2.provider.ClientDetailsService;
+import org.springframework.security.oauth2.provider.OAuth2Authentication;
+import org.springframework.security.oauth2.provider.token.AuthorizationServerTokenServices;
+import org.springframework.security.oauth2.provider.token.DefaultTokenServices;
+import org.springframework.security.oauth2.provider.token.TokenEnhancer;
+import org.springframework.security.oauth2.provider.token.TokenEnhancerChain;
 import org.springframework.security.oauth2.provider.token.TokenStore;
-import org.springframework.security.oauth2.provider.token.store.JdbcTokenStore;
+import org.springframework.security.oauth2.provider.token.store.JwtAccessTokenConverter;
+import org.springframework.security.oauth2.provider.token.store.JwtTokenStore;
+import org.springframework.security.oauth2.provider.token.store.KeyStoreKeyFactory;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 
-import javax.inject.Inject;
-import javax.sql.DataSource;
+import com.mycompany.myapp.security.AjaxLogoutSuccessHandler;
+import com.mycompany.myapp.security.AuthoritiesConstants;
+import com.mycompany.myapp.security.Http401UnauthorizedEntryPoint;
 
 @Configuration
 public class OAuth2ServerConfiguration {
@@ -60,6 +76,9 @@ public class OAuth2ServerConfiguration {
                 .antMatchers("/api/authenticate").permitAll()
                 .antMatchers("/api/register").permitAll()
                 .antMatchers("/api/logs/**").hasAnyAuthority(AuthoritiesConstants.ADMIN)
+                .antMatchers("/api/genders").hasAuthority(AuthoritiesConstants.ADMIN)
+                .antMatchers("/api/provinces").hasAuthority(AuthoritiesConstants.ADMIN)
+                .antMatchers("/api/phoneTypes").hasAuthority(AuthoritiesConstants.ADMIN)
                 .antMatchers("/api/**").authenticated()
                 .antMatchers("/metrics/**").hasAuthority(AuthoritiesConstants.ADMIN)
                 .antMatchers("/health/**").hasAuthority(AuthoritiesConstants.ADMIN)
@@ -76,6 +95,12 @@ public class OAuth2ServerConfiguration {
                 .antMatchers("/protected/**").authenticated();
 
         }
+
+        @Override
+        public void configure(ResourceServerSecurityConfigurer resources)
+        		throws Exception {
+        	resources.resourceId("weApi");
+        }
     }
 
     @Configuration
@@ -89,12 +114,53 @@ public class OAuth2ServerConfiguration {
 
         private RelaxedPropertyResolver propertyResolver;
 
-        @Inject
-        private DataSource dataSource;
+		@Bean
+		public JwtAccessTokenConverter jwtAccessTokenConverter() {
+			JwtAccessTokenConverter converter = new JwtAccessTokenConverter();
+			KeyPair keyPair = new KeyStoreKeyFactory(
+					new ClassPathResource("keystore.jks"), "foobar".toCharArray())
+					.getKeyPair("test");
+			converter.setKeyPair(keyPair);
+			return converter;
+		}
 
         @Bean
         public TokenStore tokenStore() {
-            return new JdbcTokenStore(dataSource);
+        	return new JwtTokenStore(jwtAccessTokenConverter());
+        }
+
+        @Bean
+        public TokenEnhancerChain authorizationServerTokenEnhancerChain() {
+            final TokenEnhancerChain tokenEnhancerChain = new TokenEnhancerChain();
+            tokenEnhancerChain.setTokenEnhancers(Arrays.asList(new AuthorizationServerTokenEnhancer(), jwtAccessTokenConverter()));
+            return tokenEnhancerChain;
+        }
+
+        @Inject
+        private ClientDetailsService clientDetailsService;
+
+        @Bean
+        public AuthorizationServerTokenServices authorizationServerTokenServices() {
+            DefaultTokenServices defaultTokenServices = new DefaultTokenServices();
+            defaultTokenServices.setTokenStore(tokenStore());
+            defaultTokenServices.setClientDetailsService(clientDetailsService);
+            defaultTokenServices.setTokenEnhancer(authorizationServerTokenEnhancerChain());
+//            defaultTokenServices.setSupportRefreshToken(true);
+            return defaultTokenServices;
+        }
+
+        private static class AuthorizationServerTokenEnhancer implements TokenEnhancer {
+
+            @Override
+            public OAuth2AccessToken enhance(OAuth2AccessToken accessToken, OAuth2Authentication authentication) {
+                final DefaultOAuth2AccessToken result = new DefaultOAuth2AccessToken(accessToken);
+//                final User user = (User) authentication.getPrincipal();
+                result.getAdditionalInformation().put("sub", "1.1");
+                result.getAdditionalInformation().put("iss", "pe");
+                result.getAdditionalInformation().put("aud", Arrays.asList("weApi"));
+                result.getAdditionalInformation().put("iat", Math.floorDiv(new Date().getTime(),1000));
+                return result;
+            }
         }
 
         @Inject
@@ -104,9 +170,8 @@ public class OAuth2ServerConfiguration {
         @Override
         public void configure(AuthorizationServerEndpointsConfigurer endpoints)
                 throws Exception {
-
             endpoints
-                    .tokenStore(tokenStore())
+            		.tokenServices(authorizationServerTokenServices())
                     .authenticationManager(authenticationManager);
         }
 
@@ -117,7 +182,8 @@ public class OAuth2ServerConfiguration {
                 .withClient(propertyResolver.getProperty(PROP_CLIENTID))
                 .scopes("read", "write")
                 .authorities(AuthoritiesConstants.ADMIN, AuthoritiesConstants.USER)
-                .authorizedGrantTypes("password", "refresh_token")
+                .authorizedGrantTypes("password")
+//                , "refresh_token")
                 .secret(propertyResolver.getProperty(PROP_SECRET))
                 .accessTokenValiditySeconds(propertyResolver.getProperty(PROP_TOKEN_VALIDITY_SECONDS, Integer.class, 1800));
         }

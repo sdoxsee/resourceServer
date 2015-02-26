@@ -1,5 +1,5 @@
 server:
-    port: 8080
+    port: 8081
 
 spring:
     profiles:
@@ -9,7 +9,7 @@ spring:
         url: 
         databaseName: ResourceServer
         serverName: localhost
-        username: ResourceServer
+        username: we
         password: 
 
     jpa:
@@ -28,7 +28,7 @@ spring:
             hibernate.cache.region.factory_class: org.hibernate.cache.ehcache.SingletonEhCacheRegionFactory
 
     mail:
-        baseUrl: http://localhost:8080
+        baseUrl: http://localhost:8081
 
     thymeleaf:
         mode: XHTML
